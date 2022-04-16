@@ -1,0 +1,159 @@
+This document describes some problems with general.el's syntax and solutions to fixing them in familiar.el.
+
+* Choosing the Syntax of the Internal Base Definer
+The internal base definer should be unambiguous (no guesswork to determine what is a positional argument like ~general-def~ did) and easy to parse. Using keyword arguments and a list for every keybinding seems simplest:
+#+begin_src emacs-lisp
+;; possible example
+(familiar--define-key
+ :keymaps 'foo-map
+ (list "a" #'a)
+ (list "b" #'b :extended-def-keyword t)
+ ;; this will expand to two lists
+ (list (list "key1" "key2") #'c)
+ ;; alternatively, all positional arguments but the last can be keys
+ (list "key1" "key2" #'c :extend-def-keyword t))
+#+end_src
+
+Basically there is a global plist of settings (or defaults) for all keybindings and a local plist of settings for each keybinding.
+
+* Choosing the Syntax of the Main User-facing Definer
+Goals:
+- Be as simple as possible
+- Maintain full compatibility with ~define-key~ for the KEY and DEF pairs
+- Preferably maintain some backwards-compatibility with the argument lists of ~define-key~, ~evil-define-key~ (though separate replacements can be provided instead as an alternative)
+- Involve minimal or no guesswork. ~general-def~ guesses if the first arguments are keymaps, states, or keys. It cannot tell the difference between a keymap and a variable that holds a key, which can cause issues.
+
+** Choosing the Argument Structure (Positional vs. Keyword)
+*** Option 1: Just Use Keywords Like the Underlying Function
+Problem: This is unnecessarily verbose. A keymap is almost always specified (or a keymap and state for evil), so it makes sense for these to be positional arguments.
+
+*** Option 2: Have Different Functions With Different Positional Arguments
+General.el had these. The flexibility of being able to use a single shortly named function for everything like ~general-def~ is nice though. It would be simpler and less confusing to only use this single definer throughout the documentation.
+
+*** Option 3: Use One Positional Argument
+The definer could have a single positional argument for keymap information. For example:
+#+begin_src emacs-lisp
+;; it's a keymap: `define-key' compatible
+(familiar mode-map "a" #'a)
+;; list of keymaps: `general-def' compatible
+(familiar (mode1-map mode2-map) "a" #'a)
+(familiar '(mode1-map mode2-map) "a" #'a)
+;; state and keymap: a little weird; not `evil-define-key' compatible
+(familiar ((state1 keymap2) (keymap1 keymap2)) "a" #'a)
+(familiar (state1 state2 : keymap1 keymap2) "a" #'a)
+#+end_src
+
+With this option, it is always clear where the keymap specification is, and the definer can support all keybindings. However, the syntax is a bit strange, and it is incompatible with the syntax of ~global-set-key~ and ~evil-define-key~. 
+
+*** Option 4: Require Keymaps to Be Quoted
+#+begin_src emacs-lisp
+;; like `global-set-key'
+(familiar "a" #'a)
+;; like `define-key'
+(familiar 'mode-map "a" #'a)
+;; like `evil-define-key'
+(familiar 'normal 'mode-map "a" #'a)
+;; can distinguish the key as a variable since it is unquoted
+(familiar 'mode-map key-var #'key-def)
+#+end_src
+
+This still allows correctly determining when the keybindings start since a key cannot be a symbol. However, it breaks compatibility with all normal key definers because of the quoting.
+
+*** Option 5: Use an Explicit Positional Argument Separator
+We can take advantage of keywords to specify exactly where the keybindings start:
+#+begin_src emacs-lisp
+;; like `global-set-key'
+(familiar : "a" #'a)
+;; like `define-key'
+(familiar mode-map : "a" #'a)
+;; like `evil-define-key'
+(familiar 'normal mode-map : "a" #'a)
+;; can distinguish the key as a variable since it is unquoted
+(familiar mode-map : key-var #'key-def)
+#+end_src
+
+This is not a perfect drop-in replacement unless the separator is optional. If the separator is optional, this basically has the same downsides as ~general-def~. You could run into a situation where a variable holding a key is thought to be a keymap.
+
+However, this could be used to replace all existing ~define-key~ calls in one's config using a regexp search and replace that added the colon.
+
+*** Decision
+We can use both option 2 and option 5.
+
+Familiar can again provide exact equivalents like it did before. For example:
+- ~familiar-global-set-key~ - like ~global-set-key~ (new wrapper not in general.el since ~general-define-key~ could be used)
+- ~familiar-define-key~ - =KEYMAP= positional argument like ~define-key~ (not ~familiar-emacs-define-key~ since the base definer will be internal)
+- ~familiar-evil-define-key~ - =STATE KEYMAP= positional arguments like ~evil-define-key~
+
+These will not be used in the documentation or recommended but will be listed as one option for migrating all existing keybindings if you want to later display your keybindings in a formatted buffer with [[https://github.com/noctuid/annalist.el][annalist]]. A simple search/replace would allow this. A more complicated regexp search and replace will be listed as an alternative to use ~familiar~. Alternatively they could do a simple search/replace if they don't use variables for any keys in their config.
+
+~familiar~ will be the only definer used in the readme. The diffences from ~general-def~ will be as follows
+- It will specially handle =:= as a separator (~general-def~ would require =: t= as a separator)
+- All examples in the README will use an explicit separator
+- The separator will not be required, but the user will have to opt-in to not using it. There will be a variable they must set at expansion time to confirm they understand the caveats (i.e. you must use a separator if the first key bound is a variable).
+
+* Choosing the Keybinding Specification
+The key definition syntax of general.el is potentially problematic:
+- Distinguishing extended definitions from other definitions is currently doable but a little strange
+  - It has to check ~keymapp~ to distinguish a keymap definition from an extended definition
+  - It has to check ~function~ to distinguish a lambda definition from an extended definition
+  - It has to check that the list does not start with =menu-item=
+  - It has to check that the list contains keywords (since a cons is a valid definition)
+- If definitions in the future can be lists with keywords, the above solution will no longer work
+- It would be nice to be able to define multiple keys to the same definition (e.g. for self insert commands), and using lists in the key position has the same problem as above
+
+We can handle some keyword specially to specify an extended definition follows:
+#+begin_src emacs-lisp
+(familiar mode-map :
+  "a" #'a
+  :ext ("b" #'b :keyword 1 :desc "Run b")
+  "c" #'c)
+#+end_src
+
+To handle multiple keys, all positional arguments but the last can be considered keys:
+#+begin_src emacs-lisp
+(familiar mode-map :
+  "a" #'a
+  :ext ("b" #'b :keyword 1)
+  "c" #'c)
+#+end_src
+
+Lists will probably never be allowed as keys, so we could potentially remove the keyword and just have the extended definition take the place of a key def pair. I need to consider this.
+
+* Advanced Functionality
+** Dynamically Changing Options
+Some people like to make keybindings with completely different settings in the same call.
+
+~general-defs~ exists:
+#+begin_src emacs-lisp
+(general-defs 'normal mode-map
+  "a" #'a
+  'visual other-mode-map
+  "b" #'b)
+#+end_src
+
+The downside is that all settings are reset each time. Maybe you just want to change =:infix= or =:prefix= for example. Something like this might be nice:
+#+begin_src emacs-lisp
+(some-definer 'normal mode-map
+  :prefix "SPC"
+  :infix "b"
+  "a" #'buffer-command-1
+  "b" #'buffer-command-2
+  :infix "w"
+  "a" #'window-command-1)
+#+end_src
+
+General.el relies on keywords affecting all keybindings because ~general-create-definer~ creates definers by putting the default keywords at the very end. To implement something like this, we would need to use something like =:defaults (:infix "b")= instead. ~familiar~ would handle splitting these into multiple ~familiar--define-key~ calls. I think this is a reasonable change.
+
+As for changing the keymap or state for subsequent keybindings without using =:keymaps= and =:states=, I'm not sure I will add support for this, but we could do something like this potentially:
+#+begin_src emacs-lisp
+(familiar 'normal mode-map :
+  :prefix "SPC"
+  "a" #'a
+  : 'visual other-mode-map :
+  "b" #'b)
+#+end_src
+
+Possibly =::= could clear all settings. This may be getting a little to complicated, but it would be possible to implement this later without breaking backwards compatibility.
+
+** Other
+~familiar~ Will not directly provide any conditionals or delayed evaluation keywords (like Doom ~map!~ =:when=, =:unless=, and =:after=). Users who want these can build on top of ~familiar~ like ~map!~ built on top of general.el.
