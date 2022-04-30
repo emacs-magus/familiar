@@ -86,10 +86,25 @@ Familiar can again provide exact equivalents like it did before. For example:
 
 These will not be used in the documentation or recommended but will be listed as one option for migrating all existing keybindings if you want to later display your keybindings in a formatted buffer with [[https://github.com/noctuid/annalist.el][annalist]]. A simple search/replace would allow this. A more complicated regexp search and replace will be listed as an alternative to use ~familiar~. Alternatively they could do a simple search/replace if they don't use variables for any keys in their config.
 
-~familiar~ will be the only definer used in the readme. The diffences from ~general-def~ will be as follows
+~familiar~ will be the only definer used in the readme. The differences from ~general-def~ will be as follows:
 - It will specially handle =:= as a separator (~general-def~ would require =: t= as a separator)
 - All examples in the README will use an explicit separator
 - The separator will not be required, but the user will have to opt-in to not using it. There will be a variable they must set at expansion time to confirm they understand the caveats (i.e. you must use a separator if the first key bound is a variable).
+
+*** Solving Remaining Problems
+It should be possible to use a variable for the keymaps (e.g. my-lisp-maps).  I need to test if this will work without changes on the new prototype:
+
+#+begin_src emacs-lisp
+(defvar my-cider-maps '(cider-mode-map cider-repl-mode-map))
+
+(familiar my-cider-maps : "foo" #'bar)
+#+end_src
+
+I believe this will just be detected as a keymap named =my-cider-maps= and fail (which is what would happen in general.el).  ~define-key~ doesn't support binding in multiple keymaps, so we don't have to worry about compatibility here. To support this, we can just add support for keymap aliases to multiple keymaps.  Then you could just add to ~familiar-keymap-aliases~, or we could create a new helper that would also define a corresponding variable if the user needed it:
+
+#+begin_src emacs-lisp
+(familiar-keymap-alias my-cider-maps '(cider-mode-map cider-repl-mode-map))
+#+end_src
 
 * Choosing the Keybinding Specification
 The key definition syntax of general.el is potentially problematic:
